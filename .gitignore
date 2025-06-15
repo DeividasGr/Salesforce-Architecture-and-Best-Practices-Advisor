@@ -1,0 +1,4 @@
+venv
+.env
+data/vectorstore_persistent/
+src/__pycache__/
