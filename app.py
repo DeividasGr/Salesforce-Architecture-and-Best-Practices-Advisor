@@ -1,11 +1,17 @@
 import streamlit as st
 import os
+import time
 from dotenv import load_dotenv
 from src.document_processor import SalesforceDocumentProcessor
 from src.rag_system import SalesforceRAGSystem
 from src.monitoring import monitor, track_query
 from src.rate_limiter import rate_limiter
 from src.input_validator import validator
+
+# New imports for conversation history
+from src.conversation_history import conversation_history
+from src.components.history_sidebar import render_history_sidebar
+from src.conversation_export import render_export_section
 
 # Load environment variables
 load_dotenv()
@@ -80,6 +86,10 @@ def main():
     st.markdown("Get expert guidance on Salesforce development, architecture, and best practices from official documentation.")
     st.markdown("*Powered by Google Gemini 2.0 Flash & ChromaDB*")
     
+    # Render conversation history and export in sidebar
+    render_history_sidebar()
+    render_export_section()
+    
     # Sidebar with info
     with st.sidebar:
         st.header("📋 Knowledge Base")
@@ -132,10 +142,10 @@ def main():
             st.progress(progress_value)
         st.caption(f"Queries: {usage_stats['requests_last_minute']}/{usage_stats['limits']['queries_per_minute']} per minute")
         
-        # LangSmith link (update the environment variable name)
+        # LangSmith link
         if os.getenv("LANGSMITH_API_KEY"):
             st.markdown("[📈 View in LangSmith](https://smith.langchain.com)")
-        
+    
     # Main chat interface
     st.subheader("💬 Ask Your Question")
     
@@ -186,10 +196,18 @@ SELECT Id, Name, Owner.Name, CreatedBy.Name FROM Account WHERE Name LIKE '%test%
 
 {"soql_queries": 85, "dml_statements": 140, "heap_size_mb": 5}"""
     
+    # Check if there's a reused question from history
+    default_question = st.session_state.get("reuse_question", "")
+    if default_question:
+        del st.session_state.reuse_question  # Clear it after using
+    
+    # Use current_question if set, otherwise use reused question
+    current_input = st.session_state.get("current_question", default_question)
+    
     # Question input
     question = st.text_input(
         "Enter your question:",
-        value=st.session_state.get("current_question", ""),
+        value=current_input,
         placeholder="e.g., What are the best practices for handling governor limits in Apex?"
     )
     
@@ -212,11 +230,26 @@ SELECT Id, Name, Owner.Name, CreatedBy.Name FROM Account WHERE Name LIKE '%test%
         
         with st.spinner("Searching knowledge base..."):
             try:
+                # Record start time for tracking
+                start_time = time.time()
+                
                 @track_query
                 def process_question(rag_system, question):
                     return rag_system.query(question)
             
                 result = process_question(st.session_state.rag_system, clean_question)
+                
+                # Add to conversation history
+                conversation_history.add_message("user", clean_question)
+                conversation_history.add_message(
+                    "assistant", 
+                    result["answer"],
+                    metadata={
+                        "tool_used": result.get("tool_used"),
+                        "sources_count": len(result.get("sources", [])),
+                        "response_time": round(time.time() - start_time, 2)
+                    }
+                )
                 
                 # Display answer
                 st.subheader("📝 Answer:")
@@ -257,7 +290,7 @@ SELECT Id, Name, Owner.Name, CreatedBy.Name FROM Account WHERE Name LIKE '%test%
                             label_visibility="collapsed"
                         )
                 
-                # Add to chat history
+                # Add to legacy chat history (keeping for compatibility)
                 st.session_state.chat_history.append({
                     "question": question,
                     "answer": result["answer"],
@@ -277,36 +310,56 @@ SELECT Id, Name, Owner.Name, CreatedBy.Name FROM Account WHERE Name LIKE '%test%
                     "user_id": rate_limiter.get_user_id()
                 })
                 st.error("Please check the console for detailed error messages.")
-    
-    # Chat history
-    if st.session_state.chat_history:
-        st.subheader("💭 Recent Questions")
         
-        for i, chat in enumerate(reversed(st.session_state.chat_history[-5:])):
-            question_num = len(st.session_state.chat_history) - i
-            question_preview = chat['question'][:60] + "..." if len(chat['question']) > 60 else chat['question']
+    # Display current conversation using Streamlit's chat elements
+    st.subheader("💬 Current Conversation")
+    
+    # Display all messages using st.chat_message (Streamlit best practice)
+    for message in st.session_state.messages:
+        with st.chat_message(message["role"]):
+            st.write(message["content"])
             
-            with st.expander(f"Q{question_num}: {question_preview}", expanded=False):
-                st.markdown("**Full Question:**")
-                st.markdown(f"*{chat['question']}*")
+            # Show metadata for assistant messages
+            if message["role"] == "assistant" and message.get("metadata"):
+                metadata = message["metadata"]
+                if metadata.get("tool_used"):
+                    st.caption(f"🔧 Tool used: {metadata['tool_used']}")
+                if metadata.get("sources_count"):
+                    st.caption(f"📚 Sources: {metadata['sources_count']} documents")
+    
+    # Legacy chat history section (keeping for backward compatibility)
+    if st.session_state.chat_history:
+        st.subheader("💭 Recent Questions (Legacy View)")
+        
+        # Show toggle for legacy view
+        show_legacy = st.checkbox("Show legacy question history", value=False)
+        
+        if show_legacy:
+            for i, chat in enumerate(reversed(st.session_state.chat_history[-5:])):
+                question_num = len(st.session_state.chat_history) - i
+                question_preview = chat['question'][:60] + "..." if len(chat['question']) > 60 else chat['question']
                 
-                st.markdown("**Answer:**")
-                st.write(chat['answer'])
-                
-                st.markdown(f"**Sources used:** {chat['sources']}")
-                
-                # Action buttons
-                col1, col2 = st.columns(2)
-                with col1:
-                    if st.button("🔄 Ask Again", key=f"reask_exp_{question_num}"):
-                        st.session_state.current_question = chat['question']
-                        st.rerun()
-                
-                with col2:
-                    if st.button("📋 Copy Question", key=f"copy_exp_{question_num}"):
-                        st.session_state.current_question = chat['question']
-                        st.success("✅ Question copied to input field!")
-                        st.rerun()
+                with st.expander(f"Q{question_num}: {question_preview}", expanded=False):
+                    st.markdown("**Full Question:**")
+                    st.markdown(f"*{chat['question']}*")
+                    
+                    st.markdown("**Answer:**")
+                    st.write(chat['answer'])
+                    
+                    st.markdown(f"**Sources used:** {chat['sources']}")
+                    
+                    # Action buttons
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        if st.button("🔄 Ask Again", key=f"reask_exp_{question_num}"):
+                            st.session_state.current_question = chat['question']
+                            st.rerun()
+                    
+                    with col2:
+                        if st.button("📋 Copy Question", key=f"copy_exp_{question_num}"):
+                            st.session_state.current_question = chat['question']
+                            st.success("✅ Question copied to input field!")
+                            st.rerun()
 
 if __name__ == "__main__":
     main()
