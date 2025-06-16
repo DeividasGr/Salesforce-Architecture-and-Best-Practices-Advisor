@@ -9,6 +9,9 @@ import json
 import hashlib
 import time
 from typing import List, Dict, Any
+from src.monitoring import monitor, track_query
+from src.rate_limiter import rate_limit
+from src.input_validator import validator
 
 load_dotenv()
 
@@ -183,12 +186,24 @@ class SalesforceRAGSystem:
         
         print("✅ Simple function calling setup complete")
 
+    @track_query
+    @rate_limit("query")
     def query(self, question: str) -> Dict[str, Any]:
         """Query with manual function calling detection"""
+        
+        is_valid, message, cleaned_question = validator.validate_question(question)
+        if not is_valid:
+            monitor.log_system_event("validation_failed", {"question": question[:50], "reason": message})
+            raise ValueError(f"Input validation failed: {message}")
+        
+        # Use cleaned question
+        question = cleaned_question
+        
         if not hasattr(self, 'llm') or not self.llm:
             self.setup_qa_chain()
         
         print(f"Processing query: {question}")
+        monitor.log_system_event("query_started", {"question": question[:50]})
         
         # Check if question needs function calling
         question_lower = question.lower()

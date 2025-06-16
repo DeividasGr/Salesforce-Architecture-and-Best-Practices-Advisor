@@ -1,9 +1,11 @@
-# app.py - Fixed variable scope
 import streamlit as st
 import os
 from dotenv import load_dotenv
 from src.document_processor import SalesforceDocumentProcessor
 from src.rag_system import SalesforceRAGSystem
+from src.monitoring import monitor, track_query
+from src.rate_limiter import rate_limiter
+from src.input_validator import validator
 
 # Load environment variables
 load_dotenv()
@@ -109,7 +111,31 @@ def main():
             ]
             for source in sources:
                 st.markdown(f"• {source}")
+                
+        st.header("📊 System Monitoring")
+        metrics = monitor.get_metrics()
+        usage_stats = rate_limiter.get_usage_stats()
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            st.metric("Total Queries", metrics["total_queries"])
+            st.metric("Function Calls", metrics["function_calls"])
     
+        with col2:
+            st.metric("Avg Response", f"{metrics['average_response_time']}s")
+            st.metric("Error Rate", f"{metrics['error_rate']}%")
+    
+        # Rate limiting status
+        st.subheader("⚡ Rate Limits")
+        if usage_stats["limits"]["queries_per_minute"] > 0:
+            progress_value = min(usage_stats["requests_last_minute"] / usage_stats["limits"]["queries_per_minute"], 1.0)
+            st.progress(progress_value)
+        st.caption(f"Queries: {usage_stats['requests_last_minute']}/{usage_stats['limits']['queries_per_minute']} per minute")
+        
+        # LangSmith link (update the environment variable name)
+        if os.getenv("LANGSMITH_API_KEY"):
+            st.markdown("[📈 View in LangSmith](https://smith.langchain.com)")
+        
     # Main chat interface
     st.subheader("💬 Ask Your Question")
     
@@ -169,9 +195,28 @@ SELECT Id, Name, Owner.Name, CreatedBy.Name FROM Account WHERE Name LIKE '%test%
     
     # Process question when button is clicked
     if question and st.button("🔍 Get Answer", type="primary"):
+        is_valid, validation_message, clean_question = validator.validate_question(question)
+        if not is_valid:
+            st.error(f"❌ {validation_message}")
+            st.stop()
+    
+        # Check rate limits
+        try:
+            allowed, rate_message = rate_limiter.is_allowed("query")
+            if not allowed:
+                st.error(f"🚫 {rate_message}")
+                st.stop()
+        except Exception as e:
+            st.error(f"Rate limit error: {str(e)}")
+            st.stop()
+        
         with st.spinner("Searching knowledge base..."):
             try:
-                result = st.session_state.rag_system.query(question)
+                @track_query
+                def process_question(rag_system, question):
+                    return rag_system.query(question)
+            
+                result = process_question(st.session_state.rag_system, clean_question)
                 
                 # Display answer
                 st.subheader("📝 Answer:")
@@ -226,6 +271,11 @@ SELECT Id, Name, Owner.Name, CreatedBy.Name FROM Account WHERE Name LIKE '%test%
                 
             except Exception as e:
                 st.error(f"Error processing question: {str(e)}")
+                monitor.log_system_event("query_error", {
+                    "question": clean_question[:100],
+                    "error": str(e),
+                    "user_id": rate_limiter.get_user_id()
+                })
                 st.error("Please check the console for detailed error messages.")
     
     # Chat history
