@@ -115,19 +115,6 @@ class SalesforceMonitor:
                 self.logger.warning(f"Failed to send run to LangSmith: {e}")
         return None
     
-    def get_metrics(self) -> Dict[str, Any]:
-        """Get system metrics"""
-        avg_response_time = sum(self.response_times) / len(self.response_times) if self.response_times else 0
-        
-        return {
-            "total_queries": self.query_count,
-            "total_errors": self.error_count,
-            "function_calls": self.function_call_count,
-            "average_response_time": round(avg_response_time, 2),
-            "error_rate": round((self.error_count / self.query_count * 100), 2) if self.query_count > 0 else 0,
-            "uptime": "N/A"  # Can be enhanced with actual uptime tracking
-        }
-    
     @traceable(name="system_event")
     def log_system_event(self, event: str, details: Dict[str, Any]):
         """Log system events with tracing"""

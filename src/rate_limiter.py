@@ -61,24 +61,6 @@ class RateLimiter:
             # Add current request
             user_requests.append(current_time)
             return True, None
-    
-    def get_usage_stats(self) -> Dict[str, Any]:
-        """Get current usage statistics"""
-        user_id = self.get_user_id()
-        current_time = time.time()
-        
-        with self.lock:
-            user_requests = self.requests[user_id]
-            
-            minute_count = sum(1 for req_time in user_requests if current_time - req_time < 60)
-            hour_count = sum(1 for req_time in user_requests if current_time - req_time < 3600)
-            
-            return {
-                "requests_last_minute": minute_count,
-                "requests_last_hour": hour_count,
-                "limits": self.limits,
-                "user_id": user_id
-            }
 
 # Global rate limiter
 rate_limiter = RateLimiter()
