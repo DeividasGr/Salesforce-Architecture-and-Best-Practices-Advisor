@@ -3,7 +3,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 import pandas as pd
 import time
-from typing import Dict, List, Any
+from typing import Dict, Any
 
 class SimpleRAGVisualizer:
     def __init__(self):

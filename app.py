@@ -135,30 +135,6 @@ def main():
             ]
             for source in sources:
                 st.markdown(f"• {source}")
-                
-        st.header("📊 System Monitoring")
-        metrics = monitor.get_metrics()
-        usage_stats = rate_limiter.get_usage_stats()
-        
-        col1, col2 = st.columns(2)
-        with col1:
-            st.metric("Total Queries", metrics["total_queries"])
-            st.metric("Function Calls", metrics["function_calls"])
-    
-        with col2:
-            st.metric("Avg Response", f"{metrics['average_response_time']}s")
-            st.metric("Error Rate", f"{metrics['error_rate']}%")
-    
-        # Rate limiting status
-        st.subheader("⚡ Rate Limits")
-        if usage_stats["limits"]["queries_per_minute"] > 0:
-            progress_value = min(usage_stats["requests_last_minute"] / usage_stats["limits"]["queries_per_minute"], 1.0)
-            st.progress(progress_value)
-        st.caption(f"Queries: {usage_stats['requests_last_minute']}/{usage_stats['limits']['queries_per_minute']} per minute")
-        
-        # LangSmith link
-        if os.getenv("LANGSMITH_API_KEY"):
-            st.markdown("[📈 View in LangSmith](https://smith.langchain.com)")
     
     # Main chat interface
     st.subheader("💬 Ask Your Question")
