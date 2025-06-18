@@ -13,6 +13,9 @@ from src.conversation_history import conversation_history
 from src.components.history_sidebar import render_history_sidebar
 from src.conversation_export import render_export_section
 
+# Import simple RAG visualizer
+from src.components.rag_visualizer import SimpleRAGVisualizer, add_visualization_to_sidebar, render_simple_rag_viz
+
 # Load environment variables
 load_dotenv()
 
@@ -28,6 +31,8 @@ if "rag_system" not in st.session_state:
     st.session_state.rag_system = None
 if "chat_history" not in st.session_state:
     st.session_state.chat_history = []
+if "messages" not in st.session_state:
+    st.session_state.messages = []
 
 def initialize_rag_system():
     """Initialize RAG system with smart loading"""
@@ -85,6 +90,15 @@ def main():
     st.title("⚡ Salesforce Architecture & Best Practices Advisor")
     st.markdown("Get expert guidance on Salesforce development, architecture, and best practices from official documentation.")
     st.markdown("*Powered by Google Gemini 2.0 Flash & ChromaDB*")
+    
+    # Add visualization option to sidebar and check for dashboard view
+    show_viz = add_visualization_to_sidebar()
+    
+    # Check if dashboard should be shown
+    if st.session_state.get('show_dashboard', False):
+        render_simple_rag_viz()
+        st.session_state.show_dashboard = False
+        return
     
     # Render conversation history and export in sidebar
     render_history_sidebar()
@@ -238,6 +252,23 @@ SELECT Id, Name, Owner.Name, CreatedBy.Name FROM Account WHERE Name LIKE '%test%
                     return rag_system.query(question)
             
                 result = process_question(st.session_state.rag_system, clean_question)
+                response_time = time.time() - start_time
+                
+                visualizer = SimpleRAGVisualizer()
+                visualizer.track_query(clean_question, result, response_time)
+
+                # Get visualization setting from session state
+                show_viz = st.session_state.get('show_query_viz', True)
+                                
+                # Add visualization tracking
+                if show_viz:
+                    visualizer = SimpleRAGVisualizer()
+                    visualizer.track_query(clean_question, result, response_time)
+                    
+                    # Show current query visualization
+                    st.markdown("---")
+                    visualizer.show_current_query_viz(result)
+                    st.markdown("---")
                 
                 # Add to conversation history
                 conversation_history.add_message("user", clean_question)
@@ -247,7 +278,7 @@ SELECT Id, Name, Owner.Name, CreatedBy.Name FROM Account WHERE Name LIKE '%test%
                     metadata={
                         "tool_used": result.get("tool_used"),
                         "sources_count": len(result.get("sources", [])),
-                        "response_time": round(time.time() - start_time, 2)
+                        "response_time": round(response_time, 2)
                     }
                 )
                 
