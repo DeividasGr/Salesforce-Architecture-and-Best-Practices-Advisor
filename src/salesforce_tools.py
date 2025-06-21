@@ -1,7 +1,97 @@
 from langchain.tools import tool
 import re
 import json
-from typing import Dict, List, Any
+import html
+
+def clean_input(code: str) -> str:
+    """Clean and decode HTML entities from Streamlit input"""
+    if not code:
+        return code
+    
+    # More aggressive HTML entity cleaning
+    cleaned = code
+    
+    # Multiple passes to handle double-encoding
+    for _ in range(3):  # Up to 3 passes for nested encoding
+        cleaned = html.unescape(cleaned)
+    
+    # Manual replacement of common HTML entities (case-insensitive)
+    html_entities = {
+        '&lt;': '<',
+        '&LT;': '<',
+        '&gt;': '>',
+        '&GT;': '>',
+        '&amp;': '&',
+        '&AMP;': '&',
+        '&#x27;': "'",
+        '&#X27;': "'",
+        '&#39;': "'",
+        '&quot;': '"',
+        '&QUOT;': '"',
+        '&apos;': "'",
+        '&APOS;': "'",
+        '&nbsp;': ' ',
+        '&NBSP;': ' ',
+        '&#60;': '<',
+        '&#62;': '>',
+        '&#38;': '&',
+        '&#34;': '"'
+    }
+    
+    # Apply replacements multiple times in case of nested encoding
+    for _ in range(2):
+        for entity, replacement in html_entities.items():
+            cleaned = cleaned.replace(entity, replacement)
+    
+    # Remove any remaining HTML tags
+    cleaned = re.sub(r'<[^>]+>', '', cleaned)
+    
+    # Fix whitespace issues that might come from HTML formatting
+    # Replace multiple spaces with single spaces but preserve indentation
+    lines = cleaned.split('\n')
+    fixed_lines = []
+    for line in lines:
+        # Only fix excessive spaces within the line content, preserve leading spaces
+        if line.strip():  # Only process non-empty lines
+            leading_spaces = len(line) - len(line.lstrip())
+            content = line.strip()
+            # Fix multiple spaces within content
+            content = re.sub(r'  +', ' ', content)
+            fixed_lines.append(' ' * leading_spaces + content)
+        else:
+            fixed_lines.append(line)
+    
+    return '\n'.join(fixed_lines)
+
+def format_apex_code(code: str) -> str:
+    """Format single-line Apex code into properly structured multi-line code"""
+    if not code or not code.strip():
+        return code
+    
+    # Code should already be cleaned, don't double-clean
+    cleaned = code
+    
+    if '\n' in cleaned and len(cleaned.split('\n')) > 3:
+        return cleaned
+    
+    formatted = cleaned.strip()
+    
+    formatted = re.sub(r'\{\s*', '{\n', formatted)
+    
+    formatted = re.sub(r'\s*\}', '\n}', formatted)
+    
+    formatted = re.sub(r';\s*(?![^(]*\))', ';\n', formatted)
+    
+    formatted = re.sub(r'\n+', '\n', formatted)
+    
+    lines = []
+    for line in formatted.split('\n'):
+        cleaned = line.strip()
+        if cleaned:
+            lines.append(cleaned)
+    
+    return '\n'.join(lines)
+
 
 @tool
 def apex_code_reviewer(code: str) -> str:
@@ -18,53 +108,164 @@ def apex_code_reviewer(code: str) -> str:
     if not code or not code.strip():
         return "Please provide Apex code to review."
     
+    # FIRST: Clean HTML entities immediately
+    cleaned_code = clean_input(code)
+    
+    # Enhanced debug logging with LangSmith tracing
+    debug_info = {
+        "original_code": repr(code),
+        "cleaned_code": repr(cleaned_code),
+        "code_length": len(code),
+        "cleaned_length": len(cleaned_code),
+        "code_type": str(type(code)),
+        "execution_context": "streamlit" if hasattr(__builtins__, '__IPYTHON__') or 'streamlit' in str(globals()) else "local",
+        "has_html_entities": "&lt;" in code or "&#x27;" in code or "&gt;" in code
+    }
+
+    # Use cleaned code for formatting instead of original
+    formatted_code = format_apex_code(cleaned_code)
+    
+    formatting_debug = {
+        "formatted_code": repr(formatted_code),
+        "formatted_length": len(formatted_code),
+        "lines_count": len(formatted_code.split('\n')),
+        "formatting_changed": code != formatted_code
+    }
+    
     issues = []
     recommendations = []
-    in_loop = False
+    lines = formatted_code.split('\n')
     
-    # Check for SOQL in loops (major governor limit violation)
-    soql_pattern = r'\[.*SELECT.*\]'
-    loop_patterns = [r'for\s*\(', r'while\s*\(', r'do\s*\{']
+    soql_patterns = [
+        r'\[[\s\S]*?SELECT[\s\S]*?\]',
+        r'Database\.query\s*\(',
+        r'Database\.queryWithBinds\s*\(',
+        r'Database\.getQueryLocator\s*\(',
+        r'\.query\s*\('
+    ]
     
-    lines = code.split('\n')
+    dml_patterns = [
+        r'\binsert\s+',
+        r'\bupdate\s+', 
+        r'\bdelete\s+',
+        r'\bupsert\s+',
+        r'Database\.insert\s*\(',
+        r'Database\.update\s*\(',
+        r'Database\.delete\s*\(',
+        r'Database\.upsert\s*\('
+    ]
+    
+    loop_patterns = [
+        (r'\bfor\s*\([^:)]*;[^;)]*;[^)]*\)', 'for'), 
+        (r'\bfor\s*\([^)]*:\s*[^)]*\)', 'for'),
+        (r'\bwhile\s*\([^)]*\)', 'while'),
+        (r'\bdo\s*\{', 'do-while')
+    ]
+    
+    loop_stack = []
+    current_brace_level = 0
     
     for i, line in enumerate(lines, 1):
-        line_lower = line.lower().strip()
+        line_clean = line.strip()
+        line_lower = line_clean.lower()
         
-        for loop_pattern in loop_patterns:
+        open_braces = line_clean.count('{')
+        braces_closed = line_clean.count('}')
+                
+        for loop_pattern, loop_type in loop_patterns:
             if re.search(loop_pattern, line_lower):
-                in_loop = True
+                print(f"DEBUG - Found {loop_type} loop at line {i}: {line_clean}")
+                if '{' in line_clean:
+                    loop_stack.append((i, loop_type, current_brace_level + open_braces))
+                elif ';' in line_clean:
+                    print(f"DEBUG - Single-line {loop_type} loop detected at line {i}")
+                    for soql_pattern in soql_patterns:
+                        if re.search(soql_pattern, line, re.IGNORECASE):
+                            print(f"DEBUG - SOQL pattern matched in single-line loop: {soql_pattern}")
+                            issues.append(f"Line {i}: SOQL in single-line {loop_type} loop - Governor limit violation!")
+                            recommendations.append("Move SOQL queries outside loops and use bulk operations with collections")
+                    for dml_pattern in dml_patterns:
+                        if re.search(dml_pattern, line_lower):
+                            print(f"DEBUG - DML pattern matched in single-line loop: {dml_pattern}")
+                            issues.append(f"Line {i}: DML in single-line {loop_type} loop - Governor limit violation!")
+                            recommendations.append("Collect records in collections and perform bulk DML operations outside loops")
+                else:
+                    loop_stack.append((i, loop_type, current_brace_level + 1))
                 break
             
-    if in_loop and re.search(soql_pattern, line, re.IGNORECASE):
-            issues.append(f"Line {i}: SOQL query detected inside loop - Governor limit violation!")
-            recommendations.append("Move SOQL queries outside loops and use bulk operations")
+        current_brace_level += open_braces
         
-    # Check for DML in loops
-    dml_patterns = ['insert ', 'update ', 'delete ', 'upsert ']
-    if in_loop and any(dml in line_lower for dml in dml_patterns):
-        issues.append(f"Line {i}: DML operation in loop - Governor limit violation!")
-        recommendations.append("Collect records and perform DML operations in bulk outside loops")
-    
-    if '}' in line:
-        in_loop = False
-    
-    id_pattern = r'[0-9a-zA-Z]{15,18}'
-    if re.search(id_pattern, code):
-        issues.append("Hardcoded IDs detected - Use Custom Settings or Custom Metadata instead")
-        recommendations.append("Replace hardcoded IDs with configurable Custom Settings or Custom Metadata")
-        
-    if 'system.debug' in code.lower():
-        recommendations.append("Remove System.debug statements before deploying to production")
-        
-    if 'try' in code.lower() and 'catch' not in code.lower():
-        issues.append("Try block without catch - Add proper exception handling")
-        recommendations.append("Always include catch blocks with proper exception handling")
-        
-    if 'trigger' in code.lower() and 'trigger.new' in code.lower():
-        if not any(bulk_keyword in code.lower() for bulk_keyword in ['list<', 'set<', 'map<']):
-            recommendations.append("Use collections (List, Set, Map) for bulk processing in triggers")
+        # Only check for SOQL/DML inside loops if we're actually inside a loop AND not on a closing brace line
+        if loop_stack and braces_closed == 0:
+            # Check SOQL in loop
+            for soql_pattern in soql_patterns:
+                if re.search(soql_pattern, line, re.IGNORECASE):
+                    loop_line, loop_type, _ = loop_stack[-1]
+                    issues.append(f"Line {i}: SOQL query in {loop_type} loop (started at line {loop_line}) - Governor limit violation!")
+                    recommendations.append("Move SOQL queries outside loops and use bulk operations with collections")
+                    break
             
+            # Check DML in loop
+            for dml_pattern in dml_patterns:
+                if re.search(dml_pattern, line_lower):
+                    loop_line, loop_type, _ = loop_stack[-1]
+                    issues.append(f"Line {i}: DML operation in {loop_type} loop (started at line {loop_line}) - Governor limit violation!")
+                    recommendations.append("Collect records in collections and perform bulk DML operations outside loops")
+                    break
+        
+        # Update brace level first
+        current_brace_level -= braces_closed
+        
+        # Then check if we've closed any loops
+        if braces_closed > 0 and loop_stack:
+            loop_stack = [(line_num, loop_type, brace_level) 
+                        for line_num, loop_type, brace_level in loop_stack 
+                        if brace_level > current_brace_level]
+            
+    code_lower = cleaned_code.lower()
+    
+    hardcoded_id_patterns = [
+        r"Id\s*=\s*['\"][0-9a-zA-Z]{15,18}['\"]",
+        r"WHERE\s+Id\s*=\s*['\"][0-9a-zA-Z]{15,18}['\"]",
+        r"['\"][0-9a-zA-Z]{15}[A-Z0-9]{3}['\"]",
+        r"['\"][0-9a-zA-Z]{15}['\"]"
+    ]
+
+    for pattern in hardcoded_id_patterns:
+        if re.search(pattern, cleaned_code, re.IGNORECASE):
+            issues.append("Hardcoded Salesforce IDs detected")
+            recommendations.append("Replace hardcoded IDs with Custom Settings, Custom Metadata, or SOQL queries")
+            break
+    
+    # Check for System.debug statements
+    if 'system.debug' in code_lower:
+        recommendations.append("Remove System.debug statements before deploying to production")
+    
+    # Check for try without catch
+    if 'try' in code_lower and 'catch' not in code_lower:
+        issues.append("Try block without catch - Add proper exception handling")
+        recommendations.append("Always include catch blocks with specific exception types (e.g., DmlException, QueryException)")
+    
+    # Check for trigger best practices
+    if 'trigger' in code_lower and 'trigger.new' in code_lower:
+        if not any(bulk_keyword in code_lower for bulk_keyword in ['list<', 'set<', 'map<']):
+            recommendations.append("Use collections (List, Set, Map) for bulk processing in triggers")
+        
+        # Check for trigger context usage
+        if 'trigger.new' in code_lower and 'trigger.isinsert' not in code_lower and 'trigger.isupdate' not in code_lower:
+            recommendations.append("Use Trigger context variables (isInsert, isUpdate, isBefore, isAfter) for conditional logic")
+    
+    # Check for test class best practices
+    if '@istest' in code_lower or 'testmethod' in code_lower:
+        if 'test.starttest()' not in code_lower:
+            recommendations.append("Use Test.startTest() and Test.stopTest() in test methods to reset governor limits")
+        if 'system.assert' not in code_lower:
+            recommendations.append("Include assertions in test methods to validate expected behavior")
+    
+    # Check for sharing and security
+    if 'without sharing' in code_lower:
+        recommendations.append("Consider security implications of 'without sharing' - use 'with sharing' when possible")
+    
     # Generate review report
     review_report = "🔍 **APEX CODE REVIEW REPORT**\n\n"
     
@@ -81,14 +282,27 @@ def apex_code_reviewer(code: str) -> str:
         for rec in recommendations:
             review_report += f"• {rec}\n"
         review_report += "\n"
-        
-    review_report += "📚 **BEST PRACTICES REMINDER:**\n"
-    review_report += "• Always bulkify your code\n"
-    review_report += "• Avoid SOQL/DML in loops\n"
-    review_report += "• Use proper exception handling\n"
-    review_report += "• Test with large data volumes\n"
-    review_report += "• Follow naming conventions\n"
     
+    review_report += "📚 **APEX BEST PRACTICES CHECKLIST:**\n"
+    review_report += "• Always bulkify your code for large data volumes\n"
+    review_report += "• Avoid SOQL/DML operations inside loops\n"
+    review_report += "• Use proper exception handling with specific exception types\n"
+    review_report += "• Implement trigger patterns (One Trigger Per Object)\n"
+    review_report += "• Use Test.startTest()/stopTest() in unit tests\n"
+    review_report += "• Follow naming conventions (CamelCase for classes, camelCase for variables)\n"
+    review_report += "• Use 'with sharing' for security enforcement\n"
+    review_report += "• Avoid hardcoded IDs and values\n"
+    
+    # Log final results for comparison
+    results_debug = {
+        "issues_found": len(issues),
+        "recommendations_count": len(recommendations),
+        "issues_list": issues,
+        "recommendations_list": recommendations,
+        "report_length": len(review_report),
+        "execution_context": debug_info['execution_context']
+    }
+
     return review_report
 
 @tool
@@ -239,12 +453,12 @@ def governor_limits_calculator(operations: str) -> str:
             # Try to extract numbers from description
             ops_data = {}
             if 'soql' in operations.lower():
-                soql_match = re.search(r'(\d+).*soql', operations.lower())
+                soql_match = re.search(r'(\d+)\s*soql', operations.lower())
                 if soql_match:
                     ops_data['soql_queries'] = int(soql_match.group(1))
             
             if 'dml' in operations.lower():
-                dml_match = re.search(r'(\d+).*dml', operations.lower())
+                dml_match = re.search(r'(\d+)\s*dml', operations.lower())
                 if dml_match:
                     ops_data['dml_statements'] = int(dml_match.group(1))
             
