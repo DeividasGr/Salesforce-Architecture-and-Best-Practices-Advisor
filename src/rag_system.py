@@ -12,6 +12,7 @@ from typing import List, Dict, Any
 from src.monitoring import monitor, track_query
 from src.rate_limiter import rate_limit
 from src.input_validator import validator
+from src.salesforce_tools import governor_limits_calculator, soql_query_optimizer, apex_code_reviewer
 
 load_dotenv()
 
@@ -210,13 +211,23 @@ class SalesforceRAGSystem:
         function_result = None
         tool_used = None
         
-        # 1. APEX CODE REVIEW DETECTION
-        if any(keyword in question_lower for keyword in ["apex", "code", "class", "trigger", "review"]):
+        # 1. GOVERNOR LIMITS CALCULATION DETECTION
+        if any(keyword in question_lower for keyword in ["governor", "limits", "calculate", "usage"]):
+            
+            # Extract JSON part
+            json_start = question.find("{")
+            json_end = question.rfind("}") + 1
+            operations = question[json_start:json_end] if json_start >= 0 and json_end > json_start else question
+            print(f"📝 Extracted operations: {operations}")
+            
+            function_result = governor_limits_calculator.invoke({"operations": operations})
+            tool_used = "📊 Governor Limits Calculator"
+        
+        # 2. APEX CODE REVIEW DETECTION
+        elif (any(keyword in question_lower for keyword in ["apex", "class", "trigger"]) or 
+            any(code_keyword in question for code_keyword in ["public class", "trigger", "public", "private", "class ", "for(", "while(", "{"])):
             # Look for actual code in the question
             if any(code_keyword in question for code_keyword in ["public class", "trigger", "public", "private", "class ", "for(", "while(", "{"]):
-                from src.salesforce_tools import apex_code_reviewer
-                print("🔧 Detected Apex code - using apex_code_reviewer")
-                
                 # Extract code (look for code patterns)
                 code_start = -1
                 for pattern in ["public class", "trigger", "public", "private"]:
@@ -238,12 +249,9 @@ class SalesforceRAGSystem:
                 function_result = apex_code_reviewer.invoke({"code": code})
                 tool_used = "🔧 Apex Code Reviewer"
         
-        # 2. SOQL QUERY OPTIMIZATION DETECTION
+        # 3. SOQL QUERY OPTIMIZATION DETECTION
         elif any(keyword in question_lower for keyword in ["soql", "select", "from", "where", "query", "optimize"]):
             if "select" in question_lower:
-                from src.salesforce_tools import soql_query_optimizer
-                print("⚡ Detected SOQL query - using soql_query_optimizer")
-                
                 # Find and extract SELECT statement
                 select_start = question_lower.find("select")
                 query_part = question[select_start:] if select_start >= 0 else question
@@ -270,20 +278,6 @@ class SalesforceRAGSystem:
                 print(f"📝 Extracted query: {final_query}")
                 function_result = soql_query_optimizer.invoke({"query": final_query})
                 tool_used = "⚡ SOQL Query Optimizer"
-        
-        # 3. GOVERNOR LIMITS CALCULATION DETECTION
-        elif any(keyword in question_lower for keyword in ["governor", "limits", "calculate", "usage"]) and "{" in question:
-            from src.salesforce_tools import governor_limits_calculator
-            print("📊 Detected governor limits calculation")
-            
-            # Extract JSON part
-            json_start = question.find("{")
-            json_end = question.rfind("}") + 1
-            operations = question[json_start:json_end] if json_start >= 0 and json_end > json_start else question
-            print(f"📝 Extracted operations: {operations}")
-            
-            function_result = governor_limits_calculator.invoke({"operations": operations})
-            tool_used = "📊 Governor Limits Calculator"
         
         # 4. RETURN FUNCTION CALLING RESULT
         if function_result and tool_used:
