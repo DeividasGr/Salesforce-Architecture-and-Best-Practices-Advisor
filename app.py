@@ -33,6 +33,10 @@ if "chat_history" not in st.session_state:
     st.session_state.chat_history = []
 if "messages" not in st.session_state:
     st.session_state.messages = []
+if "input_key" not in st.session_state:
+    st.session_state.input_key = 0
+if "dropdown_key" not in st.session_state:
+    st.session_state.dropdown_key = 0
 
 def initialize_rag_system():
     """Initialize RAG system with smart loading"""
@@ -86,13 +90,32 @@ def initialize_rag_system():
         st.error(f"❌ Failed to create vector store: {str(e)}")
         st.stop()
 
+def clear_inputs():
+    """Callback function to clear inputs when button is clicked"""
+    # Save the current question value before clearing for processing
+    current_input = st.session_state.get("current_question", "")
+    if not current_input:
+        # Get the value from the current input widget
+        input_widget_key = f"question_input_{st.session_state.input_key}"
+        current_input = st.session_state.get(input_widget_key, "")
+    
+    # Store it for processing
+    st.session_state.submitted_question = current_input
+    
+    # Clear the input display
+    st.session_state.input_key += 1
+    st.session_state.dropdown_key += 1
+    if "current_question" in st.session_state:
+        del st.session_state.current_question
+
 def main():
+    
     st.title("⚡ Salesforce Architecture & Best Practices Advisor")
     st.markdown("Get expert guidance on Salesforce development, architecture, and best practices from official documentation.")
     st.markdown("*Powered by Google Gemini 2.0 Flash & ChromaDB*")
     
     # Add visualization option to sidebar and check for dashboard view
-    show_viz = add_visualization_to_sidebar()
+    add_visualization_to_sidebar()
     
     # Check if dashboard should be shown
     if st.session_state.get('show_dashboard', False):
@@ -139,31 +162,29 @@ def main():
     # Main chat interface
     st.subheader("💬 Ask Your Question")
     
-    # Example questions
-    st.markdown("**💡 Example Questions:**")
-    examples = [
-        "What are the best practices for handling governor limits in Apex?",
-        "How should I design a secure integration with external systems?",
-        "What are the different types of SOQL queries and when should I use each?",
-        "How do I implement proper error handling in Apex triggers?",
-        "What are the security considerations for REST API implementations?",
-    ]
+    # Compact example selection with dropdowns side-by-side
+    col1, col2 = st.columns(2)
     
-    # Create example buttons in columns
-    cols = st.columns(2)
-    for i, example in enumerate(examples):
-        col = cols[i % 2]
-        with col:
-            if st.button(example, key=f"example_{i}", use_container_width=True):
-                st.session_state.current_question = example
+    with col1:
+        st.markdown("**💡 Example Questions:**")
+        examples = [
+            "Select an example question...",
+            "What are the best practices for handling governor limits in Apex?",
+            "How should I design a secure integration with external systems?",
+            "What are the different types of SOQL queries and when should I use each?",
+            "How do I implement proper error handling in Apex triggers?",
+            "What are the security considerations for REST API implementations?",
+        ]
+        
+        selected_example = st.selectbox("", examples, key=f"example_dropdown_{st.session_state.dropdown_key}", label_visibility="collapsed")
+        if selected_example != "Select an example question...":
+            st.session_state.current_question = selected_example
     
-    # Function calling examples section
-    st.markdown("**🔧 Try Function Calling:**")
-    func_cols = st.columns(3)
-    
-    with func_cols[0]:
-        if st.button("📝 Review Apex Code", key="apex_example", use_container_width=True):
-            st.session_state.current_question = """Please review this Apex code:
+    with col2:
+        st.markdown("**🔧 Try Function Calling:**")
+        function_examples = {
+            "Select a function calling example...": "",
+            "📝 Review Apex Code": """Please review this Apex code:
 
 public class AccountProcessor {
     public void processAccounts() {
@@ -172,19 +193,18 @@ public class AccountProcessor {
             update acc;
         }
     }
-}"""
-    
-    with func_cols[1]:
-        if st.button("⚡ Optimize SOQL", key="soql_example", use_container_width=True):
-            st.session_state.current_question = """Can you optimize this SOQL query?
+}""",
+            "⚡ Optimize SOQL": """Can you optimize this SOQL query?
 
-SELECT Id, Name, Owner.Name, CreatedBy.Name FROM Account WHERE Name LIKE '%test%' ORDER BY CreatedDate"""
-    
-    with func_cols[2]:
-        if st.button("📊 Check Limits", key="limits_example", use_container_width=True):
-            st.session_state.current_question = """Calculate governor limits usage for these operations:
+SELECT Id, Name, Owner.Name, CreatedBy.Name FROM Account WHERE Name LIKE '%test%' ORDER BY CreatedDate""",
+            "📊 Check Limits": """Calculate governor limits usage for these operations:
 
 {"soql_queries": 85, "dml_statements": 140, "heap_size_mb": 5}"""
+        }
+        
+        selected_function = st.selectbox("", list(function_examples.keys()), key=f"function_dropdown_{st.session_state.dropdown_key}", label_visibility="collapsed")
+        if selected_function != "Select a function calling example...":
+            st.session_state.current_question = function_examples[selected_function]
     
     # Check if there's a reused question from history
     default_question = st.session_state.get("reuse_question", "")
@@ -194,16 +214,23 @@ SELECT Id, Name, Owner.Name, CreatedBy.Name FROM Account WHERE Name LIKE '%test%
     # Use current_question if set, otherwise use reused question
     current_input = st.session_state.get("current_question", default_question)
     
-    # Question input
-    question = st.text_input(
-        "Enter your question:",
-        value=current_input,
-        placeholder="e.g., What are the best practices for handling governor limits in Apex?"
-    )
+    # Question input and button
+    col1, col2 = st.columns([4, 1])
+    with col1:
+        question = st.text_input(
+            "Enter your question:",
+            value=current_input,
+            placeholder="e.g., What are the best practices for handling governor limits in Apex?",
+            key=f"question_input_{st.session_state.input_key}"
+        )
+    with col2:
+        st.markdown("<br>", unsafe_allow_html=True)  # Add spacing to align with input
+        send_button = st.button("🔍 Get Answer", type="primary", use_container_width=True, on_click=clear_inputs)
     
     # Process question when button is clicked
-    if question and st.button("🔍 Get Answer", type="primary"):
-        is_valid, validation_message, clean_question = validator.validate_question(question)
+    submitted_question = st.session_state.get("submitted_question", "")
+    if submitted_question and send_button:
+        is_valid, validation_message, clean_question = validator.validate_question(submitted_question)
         if not is_valid:
             st.error(f"❌ {validation_message}")
             st.stop()
@@ -230,17 +257,14 @@ SELECT Id, Name, Owner.Name, CreatedBy.Name FROM Account WHERE Name LIKE '%test%
                 result = process_question(st.session_state.rag_system, clean_question)
                 response_time = time.time() - start_time
                 
-                visualizer = SimpleRAGVisualizer()
-                visualizer.track_query(clean_question, result, response_time)
-
                 # Get visualization setting from session state
                 show_viz = st.session_state.get('show_query_viz', True)
                                 
                 # Add visualization tracking
+                visualizer = SimpleRAGVisualizer()
+                visualizer.track_query(clean_question, result, response_time)
+                
                 if show_viz:
-                    visualizer = SimpleRAGVisualizer()
-                    visualizer.track_query(clean_question, result, response_time)
-                    
                     # Show current query visualization
                     st.markdown("---")
                     visualizer.show_current_query_viz(result)
@@ -262,21 +286,10 @@ SELECT Id, Name, Owner.Name, CreatedBy.Name FROM Account WHERE Name LIKE '%test%
                 st.subheader("📝 Answer:")
                 st.write(result["answer"])
                 
-                # Check if any tools were used (look for tool indicators in the response)
-                answer_text = result["answer"].lower()
-                tools_used = []
-                
-                if any(keyword in answer_text for keyword in ["code review", "apex", "governor limit violation", "dml operation"]):
-                    tools_used.append("🔧 Apex Code Reviewer")
-                if any(keyword in answer_text for keyword in ["soql", "query", "optimiz", "performance", "index"]):
-                    tools_used.append("⚡ SOQL Query Optimizer") 
-                if any(keyword in answer_text for keyword in ["governor limit", "calculation", "usage", "percentage"]):
-                    tools_used.append("📊 Governor Limits Calculator")
-                
-                if tools_used:
+                # Check if any tools were used (from the RAG system response)
+                if result.get("tool_used"):
                     st.subheader("🛠️ Tools Used:")
-                    for tool in tools_used:
-                        st.markdown(f"• {tool}")
+                    st.markdown(f"• {result['tool_used']}")
                 
                 # Display sources
                 st.subheader("📚 Sources & References:")
@@ -299,15 +312,14 @@ SELECT Id, Name, Owner.Name, CreatedBy.Name FROM Account WHERE Name LIKE '%test%
                 
                 # Add to legacy chat history (keeping for compatibility)
                 st.session_state.chat_history.append({
-                    "question": question,
+                    "question": submitted_question,
                     "answer": result["answer"],
                     "sources": len(result["sources"])
                 })
                 
-                # Clear the current question
-                if "current_question" in st.session_state:
-                    del st.session_state.current_question
-                    st.rerun()  # Refresh to clear the input field
+                # Clear the submitted question after processing
+                if "submitted_question" in st.session_state:
+                    del st.session_state.submitted_question
                 
             except Exception as e:
                 st.error(f"Error processing question: {str(e)}")
@@ -317,37 +329,37 @@ SELECT Id, Name, Owner.Name, CreatedBy.Name FROM Account WHERE Name LIKE '%test%
                     "user_id": rate_limiter.get_user_id()
                 })
                 st.error("Please check the console for detailed error messages.")
-        
-    # Display current conversation using Streamlit's chat elements
-    st.subheader("💬 Current Conversation")
     
-    # Display all messages using st.chat_message (Streamlit best practice)
-    for message in st.session_state.messages:
-        with st.chat_message(message["role"]):
-            st.write(message["content"])
-            
-            # Show metadata for assistant messages
-            if message["role"] == "assistant" and message.get("metadata"):
-                metadata = message["metadata"]
-                if metadata.get("tool_used"):
-                    st.caption(f"🔧 Tool used: {metadata['tool_used']}")
-                if metadata.get("sources_count"):
-                    st.caption(f"📚 Sources: {metadata['sources_count']} documents")
+    # Show current conversation if there is one (but not immediately after processing)
+    if st.session_state.chat_history and not (submitted_question and send_button):
+        latest_chat = st.session_state.chat_history[-1]
+        st.subheader("💬 Current Conversation")
+        
+        # Display the latest question
+        with st.chat_message("user"):
+            st.write(latest_chat['question'])
+        
+        # Display the latest answer
+        with st.chat_message("assistant"):
+            st.write(latest_chat['answer'])
+            st.caption(f"📚 Sources: {latest_chat['sources']} documents")
     
-    # Legacy chat history section (keeping for backward compatibility)
-    if st.session_state.chat_history:
-        st.subheader("💭 Recent Questions (Legacy View)")
+    # Recent Questions section - show previous conversations (excluding current one)
+    if len(st.session_state.chat_history) > 1:
+        st.subheader("💭 Previous Conversations")
         
-        # Show toggle for legacy view
-        show_legacy = st.checkbox("Show legacy question history", value=False)
+        # Show toggle for previous conversations
+        show_previous = st.checkbox("Show conversation history", value=False)
         
-        if show_legacy:
-            for i, chat in enumerate(reversed(st.session_state.chat_history[-5:])):
-                question_num = len(st.session_state.chat_history) - i
+        if show_previous:
+            # Show all except the current conversation, most recent first
+            previous_chats = st.session_state.chat_history[:-1]
+            for i, chat in enumerate(reversed(previous_chats[-9:])):  # Show last 9 previous conversations
+                chat_index = len(previous_chats) - i
                 question_preview = chat['question'][:60] + "..." if len(chat['question']) > 60 else chat['question']
                 
-                with st.expander(f"Q{question_num}: {question_preview}", expanded=False):
-                    st.markdown("**Full Question:**")
+                with st.expander(f"Q{chat_index}: {question_preview}", expanded=False):
+                    st.markdown("**Question:**")
                     st.markdown(f"*{chat['question']}*")
                     
                     st.markdown("**Answer:**")
@@ -358,12 +370,12 @@ SELECT Id, Name, Owner.Name, CreatedBy.Name FROM Account WHERE Name LIKE '%test%
                     # Action buttons
                     col1, col2 = st.columns(2)
                     with col1:
-                        if st.button("🔄 Ask Again", key=f"reask_exp_{question_num}"):
+                        if st.button("🔄 Ask Again", key=f"reask_{chat_index}"):
                             st.session_state.current_question = chat['question']
                             st.rerun()
                     
                     with col2:
-                        if st.button("📋 Copy Question", key=f"copy_exp_{question_num}"):
+                        if st.button("📋 Copy Question", key=f"copy_{chat_index}"):
                             st.session_state.current_question = chat['question']
                             st.success("✅ Question copied to input field!")
                             st.rerun()

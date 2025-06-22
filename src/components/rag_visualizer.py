@@ -42,7 +42,13 @@ class SimpleRAGVisualizer:
             st.metric("Response Length", f"{len(result.get('answer', ''))} chars")
         with col3:
             tool = result.get('tool_used', 'Regular RAG')
-            st.metric("Tool Used", "Function" if tool != 'Regular RAG' else "RAG")
+            # Clean up tool name for display
+            if tool == 'Regular RAG':
+                display_tool = "RAG"
+            else:
+                # Remove emoji and clean up function calling tool names
+                display_tool = tool.replace('🔧 ', '').replace('⚡ ', '').replace('📊 ', '')
+            st.metric("Tool Used", display_tool)
         
         # Sources breakdown
         sources = result.get('sources', [])

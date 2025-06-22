@@ -8,6 +8,7 @@ from dotenv import load_dotenv
 import json
 import hashlib
 import time
+import html
 from typing import List, Dict, Any
 from src.monitoring import monitor, track_query
 from src.rate_limiter import rate_limit
@@ -211,23 +212,28 @@ class SalesforceRAGSystem:
         function_result = None
         tool_used = None
         
-        # 1. GOVERNOR LIMITS CALCULATION DETECTION
-        if any(keyword in question_lower for keyword in ["governor", "limits", "calculate", "usage"]):
+        # 1. GOVERNOR LIMITS CALCULATION DETECTION - require JSON data
+        if (any(keyword in question_lower for keyword in ["governor", "limits", "calculate", "usage"]) and 
+            "{" in question and "}" in question):
             
-            # Extract JSON part
+            # Extract JSON part and decode HTML entities
             json_start = question.find("{")
             json_end = question.rfind("}") + 1
             operations = question[json_start:json_end] if json_start >= 0 and json_end > json_start else question
-            print(f"📝 Extracted operations: {operations}")
+            
+            # Decode HTML entities (need to decode twice for double-encoded content)
+            operations = html.unescape(operations)
+            operations = html.unescape(operations)
             
             function_result = governor_limits_calculator.invoke({"operations": operations})
             tool_used = "📊 Governor Limits Calculator"
         
-        # 2. APEX CODE REVIEW DETECTION
-        elif (any(keyword in question_lower for keyword in ["apex", "class", "trigger"]) or 
-            any(code_keyword in question for code_keyword in ["public class", "trigger", "public", "private", "class ", "for(", "while(", "{"])):
-            # Look for actual code in the question
-            if any(code_keyword in question for code_keyword in ["public class", "trigger", "public", "private", "class ", "for(", "while(", "{"]):
+        # 2. APEX CODE REVIEW DETECTION - require strong code indicators
+        elif (any(strong_code in question for strong_code in ["public class", "public static", "private class", "private static"]) or
+              ("{" in question and any(code_word in question for code_word in ["public", "private", "void", "return", "if(", "for(", "while("])) or
+              ("trigger " in question.lower() and "{" in question)):
+            # Look for actual code in the question  
+            if True:  # We already checked for strong indicators above
                 # Extract code (look for code patterns)
                 code_start = -1
                 for pattern in ["public class", "trigger", "public", "private"]:
@@ -249,8 +255,8 @@ class SalesforceRAGSystem:
                 function_result = apex_code_reviewer.invoke({"code": code})
                 tool_used = "🔧 Apex Code Reviewer"
         
-        # 3. SOQL QUERY OPTIMIZATION DETECTION
-        elif any(keyword in question_lower for keyword in ["soql", "select", "from", "where", "query", "optimize"]):
+        # 3. SOQL QUERY OPTIMIZATION DETECTION - require actual SELECT statement
+        elif "select" in question_lower and "from" in question_lower:
             if "select" in question_lower:
                 # Find and extract SELECT statement
                 select_start = question_lower.find("select")
