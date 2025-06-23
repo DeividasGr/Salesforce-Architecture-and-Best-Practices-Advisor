@@ -74,12 +74,14 @@ class SalesforceMonitor:
             self.logger.error(f"Query failed: {question[:100]}... Error: {error}")
         else:
             self.response_times.append(response_time)
+            # Remove emojis for logging to avoid Unicode errors
+            clean_tool_used = tool_used.replace('🔧 ', '').replace('⚡ ', '').replace('📊 ', '') if tool_used else 'None'
             self.logger.info(
                 f"Query processed - "
                 f"Question: {question[:50]}... | "
                 f"Response time: {response_time:.2f}s | "
                 f"Sources: {sources_count} | "
-                f"Tool used: {tool_used or 'None'} | "
+                f"Tool used: {clean_tool_used} | "
                 f"Model: {model_used or 'gemini'}"
             )
             

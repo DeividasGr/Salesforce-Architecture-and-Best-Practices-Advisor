@@ -133,13 +133,26 @@ def add_visualization_to_sidebar():
         # Store in session state so it's accessible everywhere
         st.session_state.show_query_viz = show_viz
         
-        if show_viz and st.button("📈 View Dashboard"):
-            st.session_state.show_dashboard = True
+        if show_viz:
+            col1, col2 = st.columns(2)
+            with col1:
+                if st.button("📈 RAG Dashboard", use_container_width=True):
+                    st.session_state.show_dashboard = True
+            with col2:
+                if st.button("💰 Token Dashboard", use_container_width=True):
+                    st.session_state.show_token_dashboard = True
         
         return show_viz
 
 def render_simple_rag_viz():
     """Render the visualization dashboard page"""
+    # Back button at the top
+    col1, col2 = st.columns([1, 4])
+    with col1:
+        if st.button("← Back to Chat", use_container_width=True):
+            st.session_state.show_dashboard = False
+            st.rerun()
+    
     st.title("📊 RAG System Dashboard")
     
     # Add tabs for different views

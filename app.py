@@ -16,6 +16,9 @@ from src.conversation_export import render_export_section
 # Import simple RAG visualizer
 from src.components.rag_visualizer import SimpleRAGVisualizer, add_visualization_to_sidebar, render_simple_rag_viz
 
+# Import token usage components
+from src.components.token_usage_display import render_token_usage_sidebar, render_detailed_token_dashboard
+
 # Load environment variables
 load_dotenv()
 
@@ -117,15 +120,21 @@ def main():
     # Add visualization option to sidebar and check for dashboard view
     add_visualization_to_sidebar()
     
-    # Check if dashboard should be shown
+    # Check for dashboard views
     if st.session_state.get('show_dashboard', False):
         render_simple_rag_viz()
         st.session_state.show_dashboard = False
         return
     
-    # Render conversation history and export in sidebar
+    if st.session_state.get('show_token_dashboard', False):
+        render_detailed_token_dashboard()
+        st.session_state.show_token_dashboard = False
+        return
+    
+    # Render conversation history, export, and token usage in sidebar
     render_history_sidebar()
     render_export_section()
+    render_token_usage_sidebar()
     
     # Sidebar with info
     with st.sidebar:

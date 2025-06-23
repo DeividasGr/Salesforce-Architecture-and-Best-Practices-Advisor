@@ -14,6 +14,7 @@ from src.monitoring import monitor, track_query
 from src.rate_limiter import rate_limit
 from src.input_validator import validator
 from src.salesforce_tools import governor_limits_calculator, soql_query_optimizer, apex_code_reviewer
+from src.token_tracker import token_tracker
 
 load_dotenv()
 
@@ -173,7 +174,7 @@ class SalesforceRAGSystem:
         if not self.vectorstore:
             raise ValueError("Vector store not initialized")
         
-        # Create LLM
+        # Create LLM (token tracking added per call)
         self.llm = ChatGoogleGenerativeAI(
             model="gemini-2.0-flash-exp",
             temperature=0.1,
@@ -301,6 +302,18 @@ class SalesforceRAGSystem:
                     doc_context = doc.page_content[:300] + "..." if len(doc.page_content) > 300 else doc.page_content
                     enhanced_answer += f"**{i+1}. From {doc.metadata.get('source_file', 'Salesforce Docs')}:**\n{doc_context}\n\n"
             
+            # Manual token tracking for function calling (no LLM tokens used)
+            token_tracker._update_session_stats({
+                'input_tokens': 0,  # Function calling uses no LLM tokens
+                'output_tokens': 0,
+                'total_tokens': 0,
+                'model': 'function-call',
+                'response_time': 0.1,  # Minimal processing time
+                'timestamp': __import__('datetime').datetime.now().isoformat(),
+                'cost': 0.0,  # No cost for function calling
+                'estimated': False
+            })
+            
             return {
                 "answer": enhanced_answer,
                 "sources": docs[:3] if docs else [],
@@ -343,9 +356,9 @@ Instructions:
 
 Provide a comprehensive answer:"""
         
-        # Get response from LLM
+        # Get response from LLM with token tracking
         try:
-            response = self.llm.invoke(prompt_text)
+            response = self.llm.invoke(prompt_text, config={"callbacks": [token_tracker]})
             answer = response.content if hasattr(response, 'content') else str(response)
         except Exception as e:
             print(f"❌ Error getting LLM response: {e}")

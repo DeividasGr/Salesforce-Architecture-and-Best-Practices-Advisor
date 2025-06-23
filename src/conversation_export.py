@@ -3,6 +3,10 @@ import json
 import csv
 import io
 from datetime import datetime
+from reportlab.lib.pagesizes import letter
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib.colors import black, blue
 from src.conversation_history import conversation_history
 
 def export_to_json() -> str:
@@ -87,6 +91,95 @@ def export_to_markdown() -> str:
     
     return content
 
+def export_to_pdf() -> bytes:
+    """Export conversation to PDF format"""
+    messages = conversation_history.get_messages()
+    summary = conversation_history.get_conversation_summary()
+    
+    # Create PDF in memory
+    buffer = io.BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=letter)
+    
+    # Get styles
+    styles = getSampleStyleSheet()
+    title_style = ParagraphStyle(
+        'CustomTitle',
+        parent=styles['Heading1'],
+        fontSize=16,
+        spaceAfter=30,
+        textColor=blue
+    )
+    question_style = ParagraphStyle(
+        'Question',
+        parent=styles['Heading2'],
+        fontSize=12,
+        spaceBefore=20,
+        spaceAfter=10,
+        textColor=black
+    )
+    answer_style = ParagraphStyle(
+        'Answer',
+        parent=styles['Normal'],
+        fontSize=10,
+        spaceBefore=5,
+        spaceAfter=15,
+        leftIndent=20
+    )
+    meta_style = ParagraphStyle(
+        'Meta',
+        parent=styles['Normal'],
+        fontSize=8,
+        textColor=blue,
+        spaceBefore=5,
+        spaceAfter=10,
+        leftIndent=20
+    )
+    
+    # Build content
+    content = []
+    
+    # Title and summary
+    content.append(Paragraph("Salesforce RAG Conversation Export", title_style))
+    content.append(Paragraph(f"<b>Export Date:</b> {datetime.now().strftime('%B %d, %Y at %H:%M')}", styles['Normal']))
+    content.append(Paragraph(f"<b>Total Messages:</b> {summary['total_messages']}", styles['Normal']))
+    content.append(Paragraph(f"<b>Questions Asked:</b> {summary['user_messages']}", styles['Normal']))
+    content.append(Spacer(1, 20))
+    
+    # Process Q&A pairs
+    current_pair = 1
+    user_msg = None
+    
+    for msg in messages:
+        if msg["role"] == "user":
+            user_msg = msg
+        elif msg["role"] == "assistant" and user_msg:
+            # Add question
+            content.append(Paragraph(f"Q{current_pair}: {user_msg['content']}", question_style))
+            content.append(Paragraph(f"<i>Asked: {user_msg['timestamp']}</i>", meta_style))
+            
+            # Add answer (truncate if too long for PDF)
+            answer_text = msg['content']
+            if len(answer_text) > 2000:
+                answer_text = answer_text[:2000] + "... [truncated for PDF]"
+            
+            content.append(Paragraph(f"<b>Answer:</b><br/>{answer_text}", answer_style))
+            
+            # Add metadata if available
+            if msg["metadata"].get("tool_used"):
+                content.append(Paragraph(f"<b>Tool Used:</b> {msg['metadata']['tool_used']}", meta_style))
+            
+            if msg["metadata"].get("sources_count"):
+                content.append(Paragraph(f"<b>Sources:</b> {msg['metadata']['sources_count']} documents", meta_style))
+            
+            content.append(Spacer(1, 15))
+            current_pair += 1
+            user_msg = None
+    
+    # Build PDF
+    doc.build(content)
+    buffer.seek(0)
+    return buffer.getvalue()
+
 def render_export_section():
     """Render simple export section in sidebar with direct downloads"""
     with st.sidebar:
@@ -104,7 +197,7 @@ def render_export_section():
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         
         # Direct download buttons without additional steps
-        col1, col2, col3 = st.columns(3)
+        col1, col2, col3, col4 = st.columns(4)
         
         with col1:
             json_data = export_to_json()
@@ -138,3 +231,22 @@ def render_export_section():
                 help="Download as Markdown file",
                 use_container_width=True
             )
+        
+        with col4:
+            try:
+                pdf_data = export_to_pdf()
+                st.download_button(
+                    "📄 PDF",
+                    pdf_data,
+                    f"salesforce_chat_{timestamp}.pdf",
+                    "application/pdf",
+                    help="Download as PDF file",
+                    use_container_width=True
+                )
+            except ImportError:
+                st.button(
+                    "📄 PDF",
+                    disabled=True,
+                    help="PDF export requires reportlab package",
+                    use_container_width=True
+                )
