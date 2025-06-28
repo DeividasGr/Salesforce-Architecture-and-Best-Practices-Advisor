@@ -1,5 +1,12 @@
 venv
 .env
+.streamlit/secrets.toml
 data/vectorstore_persistent/
+data/vectorstore_persistent_*/
 src/__pycache__/
+src/components/__pycache__/
 logs
+*.pyc
+__pycache__/
+.DS_Store
+.vscode/
