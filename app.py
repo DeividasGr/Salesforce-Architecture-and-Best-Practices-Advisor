@@ -19,6 +19,9 @@ from src.components.rag_visualizer import SimpleRAGVisualizer, add_visualization
 # Import token usage components
 from src.components.token_usage_display import render_token_usage_sidebar, render_detailed_token_dashboard
 
+# Import simplified upload UI
+from src.components.file_watcher_ui import render_file_watcher_sidebar
+
 # Load environment variables
 load_dotenv()
 
@@ -41,6 +44,19 @@ if "input_key" not in st.session_state:
 if "dropdown_key" not in st.session_state:
     st.session_state.dropdown_key = 0
 
+# Initialize token usage tracking
+if 'token_usage' not in st.session_state:
+    from datetime import datetime
+    st.session_state.token_usage = {
+        'total_input_tokens': 0,
+        'total_output_tokens': 0,
+        'total_cost': 0.0,
+        'query_count': 0,
+        'model_usage': {},
+        'session_start': datetime.now().isoformat(),
+        'detailed_calls': []
+    }
+
 def initialize_rag_system():
     """Initialize RAG system with smart loading"""
     pdf_directory = "data/raw"
@@ -56,21 +72,33 @@ def initialize_rag_system():
         st.error("❌ No PDF files found in 'data/raw' directory!")
         st.stop()
     
-    # Check if we need to rebuild
-    if not rag_system.needs_rebuild(pdf_directory):
+    # Check for fast mode (production)
+    fast_mode = os.getenv('STREAMLIT_FAST_MODE') == '1'
+    
+    # Always try to load existing vector store first (production mode)
+    vectorstore_dir = "data/vectorstore_persistent"
+    if os.path.exists(vectorstore_dir) and os.listdir(vectorstore_dir):
         try:
             with st.spinner("📂 Loading existing knowledge base..."):
                 rag_system.load_vectorstore()
                 info = rag_system.get_collection_info()
-                st.success(f"✅ Loaded existing knowledge base with {info['count']} documents")
+                
+                if fast_mode:
+                    st.success(f"🚀 FAST MODE: Loaded {info['count']} documents")
+                else:
+                    st.success(f"✅ Loaded existing knowledge base with {info['count']} documents")
+                
                 rag_system.setup_qa_chain()
+                
+                # Skip file watcher setup for faster loading - uploads work without it
+                # setup_production_file_watcher(rag_system, pdf_directory)
+                
                 return rag_system
         except Exception as e:
             st.warning(f"⚠️ Failed to load existing vector store: {str(e)}")
-            st.info("🔄 Creating new vector store...")
-    
-    # Create new vector store
-    st.info("📚 Building knowledge base from PDFs...")
+            st.info("🔄 Creating new vector store (first time only)...")
+    else:
+        st.info("📚 Creating initial knowledge base from PDFs (first time only)...")
     
     try:
         with st.spinner(f"📄 Processing {len(pdf_files)} PDF files..."):
@@ -87,11 +115,17 @@ def initialize_rag_system():
             st.success(f"✅ Knowledge base created with {info['count']} documents")
         
         rag_system.setup_qa_chain()
+        
+        # Skip file watcher setup for faster loading - uploads work without it
+        # setup_production_file_watcher(rag_system, pdf_directory)
+        
         return rag_system
         
     except Exception as e:
         st.error(f"❌ Failed to create vector store: {str(e)}")
         st.stop()
+
+
 
 def clear_inputs():
     """Callback function to clear inputs when button is clicked"""
@@ -131,10 +165,12 @@ def main():
         st.session_state.show_token_dashboard = False
         return
     
-    # Render conversation history, export, and token usage in sidebar
+    
+    # Render conversation history, export, token usage, and file monitoring in sidebar
     render_history_sidebar()
     render_export_section()
     render_token_usage_sidebar()
+    render_file_watcher_sidebar()
     
     # Sidebar with info
     with st.sidebar:
@@ -145,7 +181,7 @@ def main():
             st.error("⚠️ Please set your GOOGLE_API_KEY in .env file")
             st.stop()
         
-        # Initialize RAG system
+        # Initialize RAG system (only once per session)
         if st.session_state.rag_system is None:
             st.session_state.rag_system = initialize_rag_system()
         

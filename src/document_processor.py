@@ -87,8 +87,19 @@ class SalesforceDocumentProcessor:
     def load_pdf(self, pdf_path: str) -> List[Document]:
         """Load and split a single PDF with ChromaDB-compatible metadata"""
         print(f"Loading PDF: {pdf_path}")
-        loader = PyPDFLoader(pdf_path)
-        documents = loader.load()
+        
+        # Check if file exists and is valid
+        if not os.path.exists(pdf_path):
+            raise FileNotFoundError(f"PDF file not found: {pdf_path}")
+        
+        if os.path.getsize(pdf_path) == 0:
+            raise ValueError(f"PDF file is empty: {pdf_path}")
+        
+        try:
+            loader = PyPDFLoader(pdf_path)
+            documents = loader.load()
+        except Exception as e:
+            raise ValueError(f"Failed to load PDF {os.path.basename(pdf_path)}: {str(e)}")
         
         filename = os.path.basename(pdf_path)
         doc_info = self.doc_type_mapping.get(filename, {

@@ -118,12 +118,32 @@ class SalesforceRAGSystem:
         """Create ChromaDB vector store with persistence"""
         print(f"Creating persistent ChromaDB vector store with {len(documents)} chunks...")
         
+        # Stop any existing file watcher to release locks (only for initial creation)
+        try:
+            from src.file_watcher_v2 import stop_file_watcher
+            stop_file_watcher()
+        except:
+            pass  # May not exist yet
+        
         if os.path.exists(self.persist_directory):
             import shutil
             try:
-                shutil.rmtree(self.persist_directory)
-                time.sleep(1)
-                print("🗑️ Removed existing vector store")
+                # Wait longer and try multiple times
+                for attempt in range(3):
+                    try:
+                        shutil.rmtree(self.persist_directory)
+                        time.sleep(2)
+                        print("🗑️ Removed existing vector store")
+                        break
+                    except Exception as e:
+                        if attempt < 2:
+                            print(f"⚠️ Attempt {attempt + 1} failed, retrying...")
+                            time.sleep(3)
+                        else:
+                            print(f"⚠️ Could not remove existing vector store: {e}")
+                            timestamp = int(time.time())
+                            self.persist_directory = f"{self.persist_directory}_{timestamp}"
+                            self.metadata_file = os.path.join(self.persist_directory, "metadata.json")
             except Exception as e:
                 print(f"⚠️ Could not remove existing vector store: {e}")
                 timestamp = int(time.time())
@@ -395,3 +415,145 @@ Provide a comprehensive answer:"""
             }
         except Exception as e:
             return {"error": f"Failed to get collection info: {str(e)}"}
+    
+    def process_single_pdf(self, pdf_path: str) -> List[Document]:
+        """Process a single PDF file and return documents"""
+        from src.document_processor import SalesforceDocumentProcessor
+        
+        print(f"📄 Processing single PDF: {os.path.basename(pdf_path)}")
+        processor = SalesforceDocumentProcessor()
+        
+        # Process just this PDF
+        documents = processor.load_pdf(pdf_path)
+        print(f"📝 Generated {len(documents)} chunks from {os.path.basename(pdf_path)}")
+        
+        return documents
+    
+    def add_documents_to_vectorstore(self, documents: List[Document], pdf_path: str, update_metadata: bool = True):
+        """Add new documents to existing vector store with optimizations"""
+        if not self.vectorstore:
+            raise ValueError("Vector store not initialized")
+        
+        filename = os.path.basename(pdf_path)
+        print(f"➕ Adding {len(documents)} documents from {filename}...")
+        
+        try:
+            # Batch add documents for better performance
+            if documents:
+                # Add all documents in one batch operation
+                self.vectorstore.add_documents(documents)
+                
+                # Skip metadata update for faster uploads (optional)
+                if update_metadata:
+                    self._update_metadata_after_change(pdf_path)
+                
+                # Get final count for reporting (lightweight operation)
+                current_count = len(self.vectorstore.get()['ids'])
+                print(f"✅ Added {len(documents)} documents from {filename}. Total: {current_count}")
+            else:
+                print(f"⚠️ No documents to add from {filename}")
+            
+        except Exception as e:
+            print(f"❌ Error adding documents from {filename}: {e}")
+            raise
+    
+    def remove_documents_by_source(self, pdf_path: str):
+        """Remove documents from a specific PDF file using ChromaDB best practices"""
+        if not self.vectorstore:
+            raise ValueError("Vector store not initialized")
+        
+        filename = os.path.basename(pdf_path)
+        print(f"🗑️ Removing documents from {filename}...")
+        
+        try:
+            # Use ChromaDB's where clause for efficient deletion
+            # This is much faster than getting all documents and filtering
+            delete_result = self.vectorstore.delete(where={"source_file": filename})
+            
+            # Check how many were deleted
+            if hasattr(delete_result, '__len__'):
+                deleted_count = len(delete_result) if delete_result else 0
+            else:
+                # Fallback: check collection count before/after
+                deleted_count = "unknown"
+            
+            print(f"🗑️ Removed {deleted_count} documents from {filename}")
+            
+            # Update metadata after deletion
+            self._update_metadata_after_change(pdf_path)
+                
+        except Exception as e:
+            print(f"❌ Error removing documents from {filename}: {e}")
+            # Don't raise - continue processing
+    
+    def _update_metadata_after_change(self, pdf_path: str):
+        """Update metadata after vector store changes"""
+        try:
+            pdf_directory = os.path.dirname(pdf_path)
+            new_fingerprint = self._get_pdf_fingerprint(pdf_directory)
+            current_count = len(self.vectorstore.get()['ids'])
+            self._save_metadata(new_fingerprint, current_count)
+        except Exception as e:
+            print(f"⚠️ Warning: Could not update metadata: {e}")
+    
+    def handle_file_change(self, file_path: str, event_type: str):
+        """Handle real-time file changes with duplicate prevention"""
+        filename = os.path.basename(file_path)
+        print(f"🔄 Processing file change: {event_type} - {filename}")
+        
+        # Skip processing if file doesn't exist or isn't a PDF
+        if not os.path.exists(file_path) or not file_path.lower().endswith('.pdf'):
+            print(f"⚠️ Skipping non-PDF or missing file: {filename}")
+            return
+        
+        # Check if we're already processing this file
+        processing_key = f"processing_{filename}"
+        if hasattr(self, processing_key) and getattr(self, processing_key, False):
+            print(f"⏳ Already processing {filename}, skipping duplicate...")
+            return
+        
+        try:
+            # Mark as processing
+            setattr(self, processing_key, True)
+            
+            if event_type == "created" or event_type == "modified":
+                # For modifications, remove existing documents first
+                if event_type == "modified":
+                    print(f"🗑️ Removing existing documents for modified file: {filename}")
+                    self.remove_documents_by_source(file_path)
+                
+                # Process and add new documents
+                print(f"📄 Processing {filename}...")
+                documents = self.process_single_pdf(file_path)
+                if documents:
+                    print(f"➕ Adding {len(documents)} documents from {filename}")
+                    self.add_documents_to_vectorstore(documents, file_path)
+                    monitor.log_system_event("pdf_processed", {
+                        "filename": filename,
+                        "event_type": event_type,
+                        "document_count": len(documents)
+                    })
+                else:
+                    print(f"⚠️ No documents generated from {filename}")
+                    
+            elif event_type == "deleted":
+                # Remove documents from deleted PDF
+                print(f"🗑️ Removing documents for deleted file: {filename}")
+                self.remove_documents_by_source(file_path)
+                monitor.log_system_event("pdf_removed", {
+                    "filename": filename
+                })
+            
+            print(f"✅ Successfully processed {event_type} event for {filename}")
+            
+        except Exception as e:
+            print(f"❌ Error handling file change for {filename}: {e}")
+            monitor.log_system_event("file_change_error", {
+                "filename": filename,
+                "event_type": event_type,
+                "error": str(e)
+            })
+            # Don't re-raise to prevent breaking the watcher
+        finally:
+            # Mark as not processing
+            setattr(self, processing_key, False)
