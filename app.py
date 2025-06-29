@@ -9,6 +9,7 @@ except ImportError:
 import streamlit as st
 import os
 import time
+from datetime import datetime
 from dotenv import load_dotenv
 from src.document_processor import SalesforceDocumentProcessor
 from src.rag_system import SalesforceRAGSystem
@@ -30,10 +31,8 @@ from src.components.token_usage_display import render_token_usage_sidebar, rende
 # Import simplified upload UI
 from src.components.file_watcher_ui import render_file_watcher_sidebar
 
-# Load environment variables
 load_dotenv()
 
-# Page config
 st.set_page_config(
     page_title="Salesforce Architecture & Best Practices Advisor",
     page_icon="⚡",
@@ -54,7 +53,6 @@ if "dropdown_key" not in st.session_state:
 
 # Initialize token usage tracking
 if 'token_usage' not in st.session_state:
-    from datetime import datetime
     st.session_state.token_usage = {
         'total_input_tokens': 0,
         'total_output_tokens': 0,
@@ -70,7 +68,6 @@ def initialize_rag_system():
     pdf_directory = "data/raw"
     rag_system = SalesforceRAGSystem()
     
-    # Check for PDFs first
     if not os.path.exists(pdf_directory):
         st.error("❌ PDF directory 'data/raw' not found!")
         st.stop()
@@ -80,9 +77,6 @@ def initialize_rag_system():
         st.error("❌ No PDF files found in 'data/raw' directory!")
         st.stop()
     
-    # Check for fast mode (production)
-    fast_mode = os.getenv('STREAMLIT_FAST_MODE') == '1'
-    
     # Always try to load existing vector store first (production mode)
     vectorstore_dir = "data/vectorstore_persistent"
     if os.path.exists(vectorstore_dir) and os.listdir(vectorstore_dir):
@@ -90,16 +84,13 @@ def initialize_rag_system():
             with st.spinner("📂 Loading existing knowledge base..."):
                 rag_system.load_vectorstore()
                 info = rag_system.get_collection_info()
-                
-                if fast_mode:
-                    st.success(f"🚀 FAST MODE: Loaded {info['count']} documents")
-                else:
-                    st.success(f"✅ Loaded existing knowledge base with {info['count']} documents")
+            
+                pdf_count = len([f for f in os.listdir(pdf_directory) if f.endswith('.pdf')])
+                success_msg = st.success(f"✅ Loaded knowledge base: {pdf_count} documents, {info['count']} chunks")
+                time.sleep(3)
+                success_msg.empty()
                 
                 rag_system.setup_qa_chain()
-                
-                # Skip file watcher setup for faster loading - uploads work without it
-                # setup_production_file_watcher(rag_system, pdf_directory)
                 
                 return rag_system
         except Exception as e:
@@ -124,30 +115,22 @@ def initialize_rag_system():
         
         rag_system.setup_qa_chain()
         
-        # Skip file watcher setup for faster loading - uploads work without it
-        # setup_production_file_watcher(rag_system, pdf_directory)
-        
         return rag_system
         
     except Exception as e:
         st.error(f"❌ Failed to create vector store: {str(e)}")
         st.stop()
 
-
-
 def clear_inputs():
     """Callback function to clear inputs when button is clicked"""
     # Save the current question value before clearing for processing
     current_input = st.session_state.get("current_question", "")
     if not current_input:
-        # Get the value from the current input widget
         input_widget_key = f"question_input_{st.session_state.input_key}"
         current_input = st.session_state.get(input_widget_key, "")
     
-    # Store it for processing
     st.session_state.submitted_question = current_input
     
-    # Clear the input display
     st.session_state.input_key += 1
     st.session_state.dropdown_key += 1
     if "current_question" in st.session_state:
@@ -159,10 +142,8 @@ def main():
     st.markdown("Get expert guidance on Salesforce development, architecture, and best practices from official documentation.")
     st.markdown("*Powered by Google Gemini 2.0 Flash & ChromaDB*")
     
-    # Add visualization option to sidebar and check for dashboard view
     add_visualization_to_sidebar()
     
-    # Check for dashboard views
     if st.session_state.get('show_dashboard', False):
         render_simple_rag_viz()
         st.session_state.show_dashboard = False
@@ -173,49 +154,25 @@ def main():
         st.session_state.show_token_dashboard = False
         return
     
-    
-    # Render conversation history, export, token usage, and file monitoring in sidebar
     render_history_sidebar()
     render_export_section()
     render_token_usage_sidebar()
     render_file_watcher_sidebar()
     
-    # Sidebar with info
     with st.sidebar:
-        st.header("📋 Knowledge Base")
-        
-        # Check for API key
         if not os.getenv("GOOGLE_API_KEY"):
             st.error("⚠️ Please set your GOOGLE_API_KEY in .env file")
             st.stop()
         
-        # Initialize RAG system (only once per session)
         if st.session_state.rag_system is None:
             st.session_state.rag_system = initialize_rag_system()
         
-        # Show collection info
         if st.session_state.rag_system:
-            info = st.session_state.rag_system.get_collection_info()
-            st.metric("Documents in Knowledge Base", info.get("count", "Unknown"))
-            
-            st.header("📖 Documentation Sources")
-            sources = [
-                "Apex Developer Guide",
-                "Security Implementation Guide", 
-                "Integration Patterns & Practices",
-                "Salesforce DX Developer Guide",
-                "SOQL and SOSL Reference",
-                "Metadata API Guide",
-                "REST API Guide", 
-                "App Limits Cheat Sheet"
-            ]
-            for source in sources:
-                st.markdown(f"• {source}")
+            pdf_count = len([f for f in os.listdir("data/raw") if f.endswith('.pdf')])
+            st.metric("Documents Loaded", pdf_count)
     
-    # Main chat interface
     st.subheader("💬 Ask Your Question")
     
-    # Compact example selection with dropdowns side-by-side
     col1, col2 = st.columns(2)
     
     with col1:
@@ -262,12 +219,10 @@ SELECT Id, Name, Owner.Name, CreatedBy.Name FROM Account WHERE Name LIKE '%test%
     # Check if there's a reused question from history
     default_question = st.session_state.get("reuse_question", "")
     if default_question:
-        del st.session_state.reuse_question  # Clear it after using
+        del st.session_state.reuse_question
     
-    # Use current_question if set, otherwise use reused question
     current_input = st.session_state.get("current_question", default_question)
     
-    # Question input and button
     col1, col2 = st.columns([4, 1])
     with col1:
         question = st.text_input(
@@ -277,10 +232,9 @@ SELECT Id, Name, Owner.Name, CreatedBy.Name FROM Account WHERE Name LIKE '%test%
             key=f"question_input_{st.session_state.input_key}"
         )
     with col2:
-        st.markdown("<br>", unsafe_allow_html=True)  # Add spacing to align with input
+        st.markdown("<br>", unsafe_allow_html=True)
         send_button = st.button("🔍 Get Answer", type="primary", use_container_width=True, on_click=clear_inputs)
     
-    # Process question when button is clicked
     submitted_question = st.session_state.get("submitted_question", "")
     if submitted_question and send_button:
         is_valid, validation_message, clean_question = validator.validate_question(submitted_question)
@@ -288,7 +242,6 @@ SELECT Id, Name, Owner.Name, CreatedBy.Name FROM Account WHERE Name LIKE '%test%
             st.error(f"❌ {validation_message}")
             st.stop()
     
-        # Check rate limits
         try:
             allowed, rate_message = rate_limiter.is_allowed("query")
             if not allowed:
@@ -318,7 +271,6 @@ SELECT Id, Name, Owner.Name, CreatedBy.Name FROM Account WHERE Name LIKE '%test%
                 visualizer.track_query(clean_question, result, response_time)
                 
                 if show_viz:
-                    # Show current query visualization
                     st.markdown("---")
                     visualizer.show_current_query_viz(result)
                     st.markdown("---")
@@ -335,16 +287,13 @@ SELECT Id, Name, Owner.Name, CreatedBy.Name FROM Account WHERE Name LIKE '%test%
                     }
                 )
                 
-                # Display answer
                 st.subheader("📝 Answer:")
                 st.write(result["answer"])
                 
-                # Check if any tools were used (from the RAG system response)
                 if result.get("tool_used"):
                     st.subheader("🛠️ Tools Used:")
                     st.markdown(f"• {result['tool_used']}")
                 
-                # Display sources
                 st.subheader("📚 Sources & References:")
                 for i, (source, metadata) in enumerate(zip(result["sources"], result["source_metadata"])):
                     with st.expander(f"📄 Source {i+1}: {metadata.get('source_file', 'Unknown')}"):
@@ -363,14 +312,12 @@ SELECT Id, Name, Owner.Name, CreatedBy.Name FROM Account WHERE Name LIKE '%test%
                             label_visibility="collapsed"
                         )
                 
-                # Add to legacy chat history (keeping for compatibility)
                 st.session_state.chat_history.append({
                     "question": submitted_question,
                     "answer": result["answer"],
                     "sources": len(result["sources"])
                 })
                 
-                # Clear the submitted question after processing
                 if "submitted_question" in st.session_state:
                     del st.session_state.submitted_question
                 
@@ -383,31 +330,25 @@ SELECT Id, Name, Owner.Name, CreatedBy.Name FROM Account WHERE Name LIKE '%test%
                 })
                 st.error("Please check the console for detailed error messages.")
     
-    # Show current conversation if there is one (but not immediately after processing)
     if st.session_state.chat_history and not (submitted_question and send_button):
         latest_chat = st.session_state.chat_history[-1]
         st.subheader("💬 Current Conversation")
         
-        # Display the latest question
         with st.chat_message("user"):
             st.write(latest_chat['question'])
         
-        # Display the latest answer
         with st.chat_message("assistant"):
             st.write(latest_chat['answer'])
             st.caption(f"📚 Sources: {latest_chat['sources']} documents")
     
-    # Recent Questions section - show previous conversations (excluding current one)
     if len(st.session_state.chat_history) > 1:
         st.subheader("💭 Previous Conversations")
         
-        # Show toggle for previous conversations
         show_previous = st.checkbox("Show conversation history", value=False)
         
         if show_previous:
-            # Show all except the current conversation, most recent first
             previous_chats = st.session_state.chat_history[:-1]
-            for i, chat in enumerate(reversed(previous_chats[-9:])):  # Show last 9 previous conversations
+            for i, chat in enumerate(reversed(previous_chats[-9:])):
                 chat_index = len(previous_chats) - i
                 question_preview = chat['question'][:60] + "..." if len(chat['question']) > 60 else chat['question']
                 
@@ -420,7 +361,6 @@ SELECT Id, Name, Owner.Name, CreatedBy.Name FROM Account WHERE Name LIKE '%test%
                     
                     st.markdown(f"**Sources used:** {chat['sources']}")
                     
-                    # Action buttons
                     col1, col2 = st.columns(2)
                     with col1:
                         if st.button("🔄 Ask Again", key=f"reask_{chat_index}"):
