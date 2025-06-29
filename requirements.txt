@@ -10,6 +10,7 @@ pysqlite3-binary
 google-genai==1.20.0
 langsmith==0.3.45
 PyPDF2==3.0.1
+pypdf
 python-dotenv==1.1.0
 plotly==5.22.0
 pandas==2.2.3
